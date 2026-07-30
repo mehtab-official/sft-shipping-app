@@ -1,0 +1,17 @@
+{
+  "name": "sft-shipping-rates",
+  "version": "0.1.0",
+  "description": "Shopify CarrierService backend that fetches live shipping rates from the SmartCourier (SFT) Rate Inquiry API",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "register-carrier-service": "node scripts/registerCarrierService.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-fetch": "^2.7.0"
+  }
+}

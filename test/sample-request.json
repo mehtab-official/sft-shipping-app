@@ -1,0 +1,63 @@
+{
+  "rate": {
+    "origin": {
+      "country": "PK",
+      "postal_code": "75500",
+      "province": "Sindh",
+      "city": "Karachi",
+      "name": null,
+      "address1": "Client Warehouse",
+      "address2": null,
+      "address3": null,
+      "phone": null,
+      "fax": null,
+      "email": null,
+      "address_type": null,
+      "company_name": "Client Store"
+    },
+    "destination": {
+      "country": "GB",
+      "country_code": "GB",
+      "postal_code": "SW1A 1AA",
+      "province": "",
+      "city": "London",
+      "name": "John Doe",
+      "address1": "10 Downing St",
+      "address2": null,
+      "address3": null,
+      "phone": null,
+      "fax": null,
+      "email": null,
+      "address_type": null,
+      "company_name": null
+    },
+    "items": [
+      {
+        "name": "Sample Product With Dimensions",
+        "sku": "SKU-1",
+        "product_id": "1234567890",
+        "quantity": 2,
+        "grams": 2500,
+        "price": 500000,
+        "vendor": "Client Store",
+        "requires_shipping": true,
+        "taxable": true,
+        "fulfillment_service": "manual"
+      },
+      {
+        "name": "Sample Product Missing Dimensions",
+        "sku": "SKU-2",
+        "product_id": "9999999999",
+        "quantity": 1,
+        "grams": 500,
+        "price": 150000,
+        "vendor": "Client Store",
+        "requires_shipping": true,
+        "taxable": true,
+        "fulfillment_service": "manual"
+      }
+    ],
+    "currency": "CAD",
+    "locale": "en"
+  }
+}

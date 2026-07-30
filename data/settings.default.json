@@ -1,0 +1,11 @@
+{
+  "currencies": {
+    "USD": 1,
+    "CAD": 1.36,
+    "EUR": 0.92,
+    "GBP": 0.79,
+    "AUD": 1.52,
+    "PKR": 280
+  },
+  "dimensionalWeightDivisor": 5000
+}
