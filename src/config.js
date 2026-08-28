@@ -17,18 +17,15 @@ const config = {
   },
 
   shopify: {
-    storeDomain: process.env.SHOPIFY_STORE_DOMAIN || '',
-    adminApiToken: process.env.SHOPIFY_ADMIN_API_TOKEN || '',
     apiVersion: process.env.SHOPIFY_API_VERSION || '2024-10',
     carrierServiceCallbackUrl: process.env.CARRIER_SERVICE_CALLBACK_URL || '',
     // Stays true until the store + product dimension metafields are real and
-    // SHOPIFY_ADMIN_API_TOKEN has the read_products scope.
+    // the per-store adminApiToken has the read_products scope.
     adminMockMode: bool(process.env.SHOPIFY_ADMIN_MOCK_MODE, true),
   },
 
-  admin: {
-    username: process.env.ADMIN_USERNAME || 'admin',
-    password: process.env.ADMIN_PASSWORD || '',
+  operator: {
+    apiKey: process.env.OPERATOR_API_KEY || '',
   },
 };
 

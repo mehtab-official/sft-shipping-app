@@ -14,6 +14,11 @@
 const fetch = require('node-fetch');
 const config = require('../config');
 
+function bool(val, fallback) {
+  if (val === undefined) return fallback;
+  return val === 'true' || val === '1';
+}
+
 // Used only when SHOPIFY_ADMIN_MOCK_MODE=true, so the dimensional-weight
 // pipeline can be built/tested before the real store + credentials exist.
 const MOCK_DIMENSIONS_BY_PRODUCT_ID = {
@@ -23,12 +28,18 @@ const MOCK_DIMENSIONS_BY_PRODUCT_ID = {
 /**
  * @param {string[]} productIds - Shopify numeric product IDs (as strings), from
  *   each cart item's `product_id` field in the CarrierService rate request.
+ * @param {{ storeDomain: string, adminApiToken: string, adminMockMode?: boolean }} storeContext
+ *   Per-store credentials — storeDomain and adminApiToken come from the Store_Record;
+ *   adminMockMode falls back to SHOPIFY_ADMIN_MOCK_MODE env var if not provided.
  * @returns {Promise<Record<string, {lengthCm:number,widthCm:number,heightCm:number}|null>>}
  */
-async function fetchProductDimensions(productIds) {
+async function fetchProductDimensions(productIds, storeContext) {
+  const { storeDomain, adminApiToken } = storeContext;
+  const adminMockMode = storeContext.adminMockMode ?? bool(process.env.SHOPIFY_ADMIN_MOCK_MODE, true);
+
   if (productIds.length === 0) return {};
 
-  if (config.shopify.adminMockMode) {
+  if (adminMockMode) {
     const result = {};
     for (const id of productIds) {
       result[id] = MOCK_DIMENSIONS_BY_PRODUCT_ID[id] || null;
@@ -56,12 +67,12 @@ async function fetchProductDimensions(productIds) {
   let response;
   try {
     response = await fetch(
-      `https://${config.shopify.storeDomain}/admin/api/${config.shopify.apiVersion}/graphql.json`,
+      `https://${storeDomain}/admin/api/${config.shopify.apiVersion}/graphql.json`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Shopify-Access-Token': config.shopify.adminApiToken,
+          'X-Shopify-Access-Token': adminApiToken,
         },
         body: JSON.stringify({ query, variables: { ids: gids } }),
         signal: controller.signal,

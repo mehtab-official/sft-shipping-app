@@ -41,8 +41,10 @@
   <div id="status"></div>
 
 <script>
+const shopDomain = window.location.pathname.split('/')[2];
+
 async function loadSettings() {
-  const res = await fetch('/admin/settings');
+  const res = await fetch('/admin/' + shopDomain + '/settings');
   const data = await res.json();
   const tbody = document.querySelector('#currency-table tbody');
   tbody.innerHTML = '';
@@ -74,7 +76,7 @@ document.getElementById('save').addEventListener('click', async () => {
 
   const dimensionalWeightDivisor = parseFloat(document.getElementById('divisor').value);
 
-  const res = await fetch('/admin/settings', {
+  const res = await fetch('/admin/' + shopDomain + '/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ currencies, dimensionalWeightDivisor }),
