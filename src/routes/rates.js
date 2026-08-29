@@ -10,9 +10,19 @@ const router = express.Router();
 
 /**
  * Shopify CarrierService callback.
- * Shopify POSTs { rate: { shop_domain, origin, destination, items, currency, locale } }
- * at checkout and expects { rates: [...] } back within ~10 seconds.
+ * Shopify POSTs { rate: { origin, destination, items, currency, locale } } at checkout
+ * and expects { rates: [...] } back within ~10 seconds.
  * https://shopify.dev/docs/apps/build/shipping/carrier-calculated-rates
+ *
+ * IMPORTANT: Shopify's rate request body does NOT include which store/shop is
+ * calling (no shop_domain field, no X-Shopify-Shop-Domain header) — this is
+ * confirmed by Shopify's own CarrierService docs. In a multi-store setup, each
+ * store's CarrierService MUST be registered with a callback_url that encodes
+ * its own shop domain as a query string, e.g.
+ *   https://<app>/rates?shop=<shop-domain>.myshopify.com
+ * See scripts/registerCarrierService.js. We read that query param below; the
+ * body's shop_domain (never actually sent by Shopify) is kept only as a
+ * legacy/test fallback.
  */
 router.post('/rates', async (req, res) => {
   try {
@@ -21,10 +31,14 @@ router.post('/rates', async (req, res) => {
       return res.status(400).json({ rates: [] });
     }
 
-    // 0. Resolve shop_domain → Store_Record
-    const shopDomain = shopifyRateRequest.shop_domain;
+    // 0. Resolve shop domain → Store_Record.
+    // Primary source: the ?shop= query param on the callback URL (Shopify echoes
+    // the callback_url exactly as registered, including its query string, on every
+    // rate request). Fallback: rate.shop_domain in the body, for any legacy/manual
+    // callers that still send it — Shopify itself never populates this field.
+    const shopDomain = (req.query && req.query.shop) || shopifyRateRequest.shop_domain;
     if (!shopDomain || typeof shopDomain !== 'string') {
-      console.warn('[rates] missing or non-string shop_domain in rate request:', typeof shopDomain);
+      console.warn('[rates] missing or non-string shop domain in rate request (checked ?shop= and body.shop_domain):', typeof shopDomain);
       return res.json({ rates: [] });
     }
 
