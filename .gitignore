@@ -1,5 +1,7 @@
 node_modules/
 .env
 *.log
-node_modules/
 data/settings.json
+data/stores.db
+data/stores.db-shm
+data/stores.db-wal
