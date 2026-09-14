@@ -59,6 +59,18 @@ const SCHEMA_SQL = `
     settings_json TEXT NOT NULL
   );
 
+  -- Catalog of courier services SFT has ever returned to us, across all stores
+  -- (SFT's rate table isn't store-specific, so this is shared). Populated
+  -- automatically as real rate responses come in, and on-demand via the
+  -- "Discover services" admin action. Used to render the enable/hide checklist
+  -- in each store's admin dashboard — see routes/admin.js.
+  CREATE TABLE IF NOT EXISTS known_services (
+    service_code   TEXT PRIMARY KEY NOT NULL,
+    courier_name   TEXT NOT NULL,
+    service_name   TEXT NOT NULL,
+    first_seen_at  INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
   PRAGMA foreign_keys = ON;
 `;
 
@@ -271,6 +283,42 @@ function deleteStore(shopDomain) {
 }
 
 // ---------------------------------------------------------------------------
+// recordKnownService / listKnownServices
+// ---------------------------------------------------------------------------
+
+/**
+ * Records a courier service in the shared catalog if it hasn't been seen
+ * before (no-op if service_code is already known). Best-effort: callers
+ * should not let a failure here break a rate response.
+ *
+ * @param {{ serviceCode: string, courierName: string, serviceName: string }} service
+ */
+function recordKnownService({ serviceCode, courierName, serviceName }) {
+  if (!serviceCode) return;
+  requireDb()
+    .prepare(
+      'INSERT OR IGNORE INTO known_services (service_code, courier_name, service_name) VALUES (?, ?, ?)'
+    )
+    .run(serviceCode, courierName || '', serviceName || '');
+}
+
+/**
+ * Returns every courier service ever recorded, sorted by courier then service name.
+ *
+ * @returns {Array<{ serviceCode: string, courierName: string, serviceName: string }>}
+ */
+function listKnownServices() {
+  const rows = requireDb()
+    .prepare('SELECT service_code, courier_name, service_name FROM known_services ORDER BY courier_name ASC, service_name ASC')
+    .all();
+  return rows.map((r) => ({
+    serviceCode: r.service_code,
+    courierName: r.courier_name,
+    serviceName: r.service_name,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // getDb — expose the db handle for modules that need to share the connection
 // ---------------------------------------------------------------------------
 
@@ -296,6 +344,8 @@ module.exports = {
   listStores,
   registerStore,
   deleteStore,
+  recordKnownService,
+  listKnownServices,
   StoreNotFoundError,
   StoreDuplicateError,
 };

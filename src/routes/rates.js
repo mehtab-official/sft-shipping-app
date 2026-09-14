@@ -1,4 +1,5 @@
 const express = require('express');
+const config = require('../config');
 const sftClient = require('../services/sftClient');
 const shopifyAdmin = require('../services/shopifyAdmin');
 const settingsStore = require('../services/settingsStore');
@@ -73,10 +74,34 @@ router.post('/rates', async (req, res) => {
     // 4. Call SFT
     const sftResponse = await sftClient.getRates(sftParams);
 
+    // 4b. Grow the shared "known services" catalog from real SFT responses, so
+    // each store's admin dashboard can offer a hide/show checklist without the
+    // merchant having to know service codes ahead of time. Best-effort and
+    // skipped in mock mode so we don't pollute the catalog with fake data.
+    if (!config.sft.mockMode && sftResponse && sftResponse.success === true && Array.isArray(sftResponse.data)) {
+      for (const entry of sftResponse.data) {
+        try {
+          storeRegistry.recordKnownService({
+            serviceCode: entry.serviceCode,
+            courierName: entry.courierName,
+            serviceName: entry.serviceName,
+          });
+        } catch (err) {
+          console.warn('[rates] failed to record known service:', err.message);
+        }
+      }
+    }
+
     // 5. Convert to the checkout's currency (customer-selected, via Shopify) using
     //    admin-configured exchange rates, then map to Shopify's rate contract
     const targetCurrency = settingsStore.getCurrencyRate(shopDomain, shopifyRateRequest.currency);
-    const rates = mapSftResponseToShopifyRates(sftResponse, targetCurrency);
+    const allRates = mapSftResponseToShopifyRates(sftResponse, targetCurrency);
+
+    // 6. Hide any service this store's admin has chosen to hide from checkout.
+    const disabledServiceCodes = new Set(settingsStore.getDisabledServiceCodes(shopDomain));
+    const rates = disabledServiceCodes.size === 0
+      ? allRates
+      : allRates.filter((rate) => !disabledServiceCodes.has(rate.service_code));
 
     return res.json({ rates });
   } catch (err) {

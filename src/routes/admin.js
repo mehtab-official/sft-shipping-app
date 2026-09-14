@@ -4,7 +4,15 @@ const express = require('express');
 const path = require('path');
 const storeAdminAuth = require('../middleware/storeAdminAuth');
 const settingsStore = require('../services/settingsStore');
+const storeRegistry = require('../services/storeRegistry');
+const sftClient = require('../services/sftClient');
 const { StoreNotFoundError } = require('../services/storeRegistry');
+
+// Benchmark params used only to sample SFT's courier catalog for the
+// "Discover services" admin action. SFT's rate table isn't store- or
+// route-specific in a way that changes *which* couriers exist, so a single
+// representative destination/weight is enough to surface the current catalog.
+const DISCOVERY_SAMPLE_PARAMS = { countryCode: 'US', doctype: 'NON-DOX', weight: 1 };
 
 const router = express.Router();
 
@@ -24,7 +32,7 @@ router.get('/admin/:shopDomain/settings', storeAdminAuth, (req, res) => {
 
 // POST /admin/:shopDomain/settings — validate and save settings for the store
 router.post('/admin/:shopDomain/settings', storeAdminAuth, (req, res) => {
-  const { currencies, dimensionalWeightDivisor } = req.body || {};
+  const { currencies, dimensionalWeightDivisor, disabledServiceCodes } = req.body || {};
 
   // Validate currencies: must be a non-array object
   if (!currencies || typeof currencies !== 'object' || Array.isArray(currencies)) {
@@ -50,10 +58,23 @@ router.post('/admin/:shopDomain/settings', storeAdminAuth, (req, res) => {
     return res.status(400).json({ error: '"dimensionalWeightDivisor" must be a positive number' });
   }
 
+  // Validate disabledServiceCodes: optional; when present must be an array of strings.
+  // Omitted entirely means "no change to hidden services" is NOT assumed here —
+  // callers (the admin UI) always send the full current list, since this save
+  // replaces the whole settings row. Defaults to [] (nothing hidden) if absent.
+  let hiddenCodes = [];
+  if (disabledServiceCodes !== undefined) {
+    if (!Array.isArray(disabledServiceCodes) || disabledServiceCodes.some((c) => typeof c !== 'string')) {
+      return res.status(400).json({ error: '"disabledServiceCodes" must be an array of service_code strings' });
+    }
+    hiddenCodes = disabledServiceCodes;
+  }
+
   try {
     const updated = settingsStore.saveSettings(req.params.shopDomain, {
       currencies,
       dimensionalWeightDivisor: divisor,
+      disabledServiceCodes: hiddenCodes,
     });
     res.json(updated);
   } catch (err) {
@@ -61,6 +82,37 @@ router.post('/admin/:shopDomain/settings', storeAdminAuth, (req, res) => {
       return res.status(404).json({ error: 'Store not found' });
     }
     throw err;
+  }
+});
+
+// GET /admin/:shopDomain/known-services — list every courier service ever
+// seen from SFT, for the admin UI's hide/show checklist. The catalog is
+// shared across stores (SFT's rate table isn't store-specific), but this
+// stays behind the same per-store auth as everything else under /admin/:shopDomain.
+router.get('/admin/:shopDomain/known-services', storeAdminAuth, (req, res) => {
+  res.json(storeRegistry.listKnownServices());
+});
+
+// POST /admin/:shopDomain/known-services/discover — run a one-off sample
+// query against SFT so the catalog is populated immediately (rather than
+// waiting for real checkout traffic to fill it in). Returns the full catalog
+// after recording anything new.
+router.post('/admin/:shopDomain/known-services/discover', storeAdminAuth, async (req, res) => {
+  try {
+    const sftResponse = await sftClient.getRates(DISCOVERY_SAMPLE_PARAMS);
+    if (sftResponse && sftResponse.success === true && Array.isArray(sftResponse.data)) {
+      for (const entry of sftResponse.data) {
+        storeRegistry.recordKnownService({
+          serviceCode: entry.serviceCode,
+          courierName: entry.courierName,
+          serviceName: entry.serviceName,
+        });
+      }
+    }
+    res.json(storeRegistry.listKnownServices());
+  } catch (err) {
+    console.error('[admin] service discovery failed:', err.message);
+    res.status(502).json({ error: 'Could not reach SFT to discover services. Try again shortly.' });
   }
 });
 

@@ -97,7 +97,31 @@ function getDimensionalWeightDivisor(shopDomain) {
 }
 
 // ---------------------------------------------------------------------------
+// getDisabledServiceCodes
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the list of courier service_codes this store has chosen to hide
+ * from checkout. Defaults to an empty list (show everything SFT returns),
+ * which matches behavior for every store that existed before this setting
+ * was introduced — nothing changes for them until they explicitly hide one.
+ *
+ * @param {string} shopDomain
+ * @returns {string[]}
+ */
+function getDisabledServiceCodes(shopDomain) {
+  const settings = getSettings(shopDomain);
+  return (settings && Array.isArray(settings.disabledServiceCodes)) ? settings.disabledServiceCodes : [];
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
-module.exports = { getSettings, saveSettings, getCurrencyRate, getDimensionalWeightDivisor };
+module.exports = {
+  getSettings,
+  saveSettings,
+  getCurrencyRate,
+  getDimensionalWeightDivisor,
+  getDisabledServiceCodes,
+};

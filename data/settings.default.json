@@ -7,5 +7,6 @@
     "AUD": 1.52,
     "PKR": 280
   },
-  "dimensionalWeightDivisor": 5000
+  "dimensionalWeightDivisor": 5000,
+  "disabledServiceCodes": []
 }

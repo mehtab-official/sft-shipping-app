@@ -37,11 +37,26 @@
     Chargeable weight = max(actual weight, L×W×H(cm) / divisor). Confirm this value with SFT before relying on it.
   </p>
 
+  <h3>Shipping services shown at checkout</h3>
+  <p style="font-size:12px;color:#666;">
+    Uncheck a courier to hide it from your customers at checkout. Everything is shown by default.
+    New couriers SFT adds later show up here automatically and stay visible unless you hide them.
+  </p>
+  <table id="services-table">
+    <thead><tr><th style="width:32px;"></th><th>Courier</th><th>Service</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p id="no-services" style="font-size:13px;color:#666;display:none;">
+    No services recorded yet.
+  </p>
+  <button class="secondary" id="discover-services">Discover services now</button>
+
   <p><button id="save">Save settings</button></p>
   <div id="status"></div>
 
 <script>
 const shopDomain = window.location.pathname.split('/')[2];
+let disabledServiceCodes = [];
 
 async function loadSettings() {
   const res = await fetch('/admin/' + shopDomain + '/settings');
@@ -50,7 +65,54 @@ async function loadSettings() {
   tbody.innerHTML = '';
   Object.entries(data.currencies || {}).forEach(([code, rate]) => addRow(code, rate));
   document.getElementById('divisor').value = data.dimensionalWeightDivisor || 5000;
+  disabledServiceCodes = Array.isArray(data.disabledServiceCodes) ? data.disabledServiceCodes : [];
+  return loadServices();
 }
+
+async function loadServices() {
+  const res = await fetch('/admin/' + shopDomain + '/known-services');
+  const services = await res.json();
+  renderServices(services);
+}
+
+function renderServices(services) {
+  const tbody = document.querySelector('#services-table tbody');
+  tbody.innerHTML = '';
+  document.getElementById('no-services').style.display = services.length === 0 ? 'block' : 'none';
+  services.forEach((svc) => {
+    const tr = document.createElement('tr');
+    const checked = !disabledServiceCodes.includes(svc.serviceCode);
+    tr.innerHTML = `
+      <td><input type="checkbox" class="service-toggle" data-code="${svc.serviceCode}" ${checked ? 'checked' : ''} /></td>
+      <td>${svc.courierName}</td>
+      <td>${svc.serviceName}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+document.getElementById('discover-services').addEventListener('click', async (e) => {
+  const btn = e.target;
+  const statusEl = document.getElementById('status');
+  btn.disabled = true;
+  btn.textContent = 'Discovering…';
+  try {
+    const res = await fetch('/admin/' + shopDomain + '/known-services/discover', { method: 'POST' });
+    if (res.ok) {
+      const services = await res.json();
+      renderServices(services);
+      statusEl.textContent = 'Service list refreshed.';
+      statusEl.style.color = 'green';
+    } else {
+      const err = await res.json();
+      statusEl.textContent = 'Error: ' + (err.error || res.statusText);
+      statusEl.style.color = 'red';
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Discover services now';
+  }
+});
 
 function addRow(code = '', rate = '') {
   const tbody = document.querySelector('#currency-table tbody');
@@ -76,10 +138,15 @@ document.getElementById('save').addEventListener('click', async () => {
 
   const dimensionalWeightDivisor = parseFloat(document.getElementById('divisor').value);
 
+  const newDisabledServiceCodes = [];
+  document.querySelectorAll('.service-toggle').forEach((cb) => {
+    if (!cb.checked) newDisabledServiceCodes.push(cb.dataset.code);
+  });
+
   const res = await fetch('/admin/' + shopDomain + '/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ currencies, dimensionalWeightDivisor }),
+    body: JSON.stringify({ currencies, dimensionalWeightDivisor, disabledServiceCodes: newDisabledServiceCodes }),
   });
 
   const statusEl = document.getElementById('status');
