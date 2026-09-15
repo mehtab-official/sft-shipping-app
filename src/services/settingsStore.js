@@ -97,21 +97,28 @@ function getDimensionalWeightDivisor(shopDomain) {
 }
 
 // ---------------------------------------------------------------------------
-// getDisabledServiceCodes
+// getDisabledServiceCodesForCountry
 // ---------------------------------------------------------------------------
 
 /**
  * Returns the list of courier service_codes this store has chosen to hide
- * from checkout. Defaults to an empty list (show everything SFT returns),
- * which matches behavior for every store that existed before this setting
- * was introduced — nothing changes for them until they explicitly hide one.
+ * from checkout for ONE destination country (e.g. hide DHL EXP for US
+ * shipments but still show it for UK shipments). Defaults to an empty list
+ * (show everything SFT returns for that country) whenever the country has no
+ * explicit configuration yet — matches today's behavior for every store
+ * until someone hides something for that specific country.
  *
  * @param {string} shopDomain
+ * @param {string} countryCode - destination country, e.g. "US" (case-insensitive)
  * @returns {string[]}
  */
-function getDisabledServiceCodes(shopDomain) {
+function getDisabledServiceCodesForCountry(shopDomain, countryCode) {
+  if (!countryCode) return [];
   const settings = getSettings(shopDomain);
-  return (settings && Array.isArray(settings.disabledServiceCodes)) ? settings.disabledServiceCodes : [];
+  const byCountry = settings && settings.disabledServiceCodesByCountry;
+  if (!byCountry || typeof byCountry !== 'object') return [];
+  const list = byCountry[countryCode.toUpperCase()];
+  return Array.isArray(list) ? list : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -123,5 +130,5 @@ module.exports = {
   saveSettings,
   getCurrencyRate,
   getDimensionalWeightDivisor,
-  getDisabledServiceCodes,
+  getDisabledServiceCodesForCountry,
 };

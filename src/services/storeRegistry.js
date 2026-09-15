@@ -60,19 +60,55 @@ const SCHEMA_SQL = `
   );
 
   -- Catalog of courier services SFT has ever returned to us, across all stores
-  -- (SFT's rate table isn't store-specific, so this is shared). Populated
+  -- (SFT's rate table isn't store-specific, so this is shared). Keyed by
+  -- (country_code, service_code) because SFT quotes a different set of
+  -- couriers per destination country — the same service_code is not assumed
+  -- to mean the same thing in two different countries. Populated
   -- automatically as real rate responses come in, and on-demand via the
-  -- "Discover services" admin action. Used to render the enable/hide checklist
-  -- in each store's admin dashboard — see routes/admin.js.
+  -- "Discover services" admin action. Used to render the per-country
+  -- enable/hide checklist in each store's admin dashboard — see routes/admin.js.
   CREATE TABLE IF NOT EXISTS known_services (
-    service_code   TEXT PRIMARY KEY NOT NULL,
+    country_code   TEXT NOT NULL,
+    service_code   TEXT NOT NULL,
     courier_name   TEXT NOT NULL,
     service_name   TEXT NOT NULL,
-    first_seen_at  INTEGER NOT NULL DEFAULT (unixepoch())
+    first_seen_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (country_code, service_code)
   );
 
   PRAGMA foreign_keys = ON;
 `;
+
+// ---------------------------------------------------------------------------
+// Defensive migration: upgrade a known_services table created by an earlier
+// version of this schema (service_code-only primary key, no country_code) to
+// the current (country_code, service_code) shape. Only matters once the
+// database lives on persistent storage across deploys — safe/no-op otherwise
+// since CREATE TABLE IF NOT EXISTS already produces the right shape on a
+// fresh database.
+// ---------------------------------------------------------------------------
+
+function migrateKnownServicesTable(dbHandle) {
+  const columns = dbHandle.prepare("PRAGMA table_info(known_services)").all();
+  const hasCountryCode = columns.some((c) => c.name === 'country_code');
+  if (hasCountryCode || columns.length === 0) return; // already current, or table didn't exist yet
+
+  console.log('[storeRegistry] migrating known_services to (country_code, service_code) schema');
+  dbHandle.exec(`
+    ALTER TABLE known_services RENAME TO known_services_old;
+    CREATE TABLE known_services (
+      country_code   TEXT NOT NULL,
+      service_code   TEXT NOT NULL,
+      courier_name   TEXT NOT NULL,
+      service_name   TEXT NOT NULL,
+      first_seen_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (country_code, service_code)
+    );
+    INSERT INTO known_services (country_code, service_code, courier_name, service_name, first_seen_at)
+      SELECT '', service_code, courier_name, service_name, first_seen_at FROM known_services_old;
+    DROP TABLE known_services_old;
+  `);
+}
 
 // ---------------------------------------------------------------------------
 // initDb
@@ -93,6 +129,8 @@ function initDb(dbPath) {
   db.pragma('foreign_keys = ON');
   // Run schema creation (idempotent)
   db.exec(SCHEMA_SQL);
+  // Upgrade older known_services tables in place, if needed (see above)
+  migrateKnownServicesTable(db);
 }
 
 // ---------------------------------------------------------------------------
@@ -287,35 +325,57 @@ function deleteStore(shopDomain) {
 // ---------------------------------------------------------------------------
 
 /**
- * Records a courier service in the shared catalog if it hasn't been seen
- * before (no-op if service_code is already known). Best-effort: callers
- * should not let a failure here break a rate response.
+ * Records a courier service in the shared catalog if this (country, service_code)
+ * pair hasn't been seen before. Best-effort: callers should not let a failure
+ * here break a rate response.
  *
- * @param {{ serviceCode: string, courierName: string, serviceName: string }} service
+ * @param {{ countryCode: string, serviceCode: string, courierName: string, serviceName: string }} service
  */
-function recordKnownService({ serviceCode, courierName, serviceName }) {
-  if (!serviceCode) return;
+function recordKnownService({ countryCode, serviceCode, courierName, serviceName }) {
+  if (!serviceCode || !countryCode) return;
   requireDb()
     .prepare(
-      'INSERT OR IGNORE INTO known_services (service_code, courier_name, service_name) VALUES (?, ?, ?)'
+      'INSERT OR IGNORE INTO known_services (country_code, service_code, courier_name, service_name) VALUES (?, ?, ?, ?)'
     )
-    .run(serviceCode, courierName || '', serviceName || '');
+    .run(countryCode.toUpperCase(), serviceCode, courierName || '', serviceName || '');
 }
 
 /**
- * Returns every courier service ever recorded, sorted by courier then service name.
+ * Returns every courier service ever recorded. Pass countryCode to scope to
+ * one destination country (case-insensitive); omit to get the full catalog
+ * across every country seen so far.
  *
- * @returns {Array<{ serviceCode: string, courierName: string, serviceName: string }>}
+ * @param {string} [countryCode]
+ * @returns {Array<{ countryCode: string, serviceCode: string, courierName: string, serviceName: string }>}
  */
-function listKnownServices() {
-  const rows = requireDb()
-    .prepare('SELECT service_code, courier_name, service_name FROM known_services ORDER BY courier_name ASC, service_name ASC')
-    .all();
+function listKnownServices(countryCode) {
+  const rows = countryCode
+    ? requireDb()
+        .prepare('SELECT country_code, service_code, courier_name, service_name FROM known_services WHERE country_code = ? ORDER BY courier_name ASC, service_name ASC')
+        .all(countryCode.toUpperCase())
+    : requireDb()
+        .prepare('SELECT country_code, service_code, courier_name, service_name FROM known_services ORDER BY country_code ASC, courier_name ASC, service_name ASC')
+        .all();
   return rows.map((r) => ({
+    countryCode: r.country_code,
     serviceCode: r.service_code,
     courierName: r.courier_name,
     serviceName: r.service_name,
   }));
+}
+
+/**
+ * Returns the distinct list of destination country codes we have any
+ * recorded services for, alphabetically. Used to populate the country
+ * picker in the admin dashboard.
+ *
+ * @returns {string[]}
+ */
+function listKnownServiceCountries() {
+  const rows = requireDb()
+    .prepare("SELECT DISTINCT country_code FROM known_services WHERE country_code != '' ORDER BY country_code ASC")
+    .all();
+  return rows.map((r) => r.country_code);
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +406,7 @@ module.exports = {
   deleteStore,
   recordKnownService,
   listKnownServices,
+  listKnownServiceCountries,
   StoreNotFoundError,
   StoreDuplicateError,
 };

@@ -8,5 +8,5 @@
     "PKR": 280
   },
   "dimensionalWeightDivisor": 5000,
-  "disabledServiceCodes": []
+  "disabledServiceCodesByCountry": {}
 }

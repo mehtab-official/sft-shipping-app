@@ -8,11 +8,10 @@ const storeRegistry = require('../services/storeRegistry');
 const sftClient = require('../services/sftClient');
 const { StoreNotFoundError } = require('../services/storeRegistry');
 
-// Benchmark params used only to sample SFT's courier catalog for the
-// "Discover services" admin action. SFT's rate table isn't store- or
-// route-specific in a way that changes *which* couriers exist, so a single
-// representative destination/weight is enough to surface the current catalog.
-const DISCOVERY_SAMPLE_PARAMS = { countryCode: 'US', doctype: 'NON-DOX', weight: 1 };
+// Defaults used to sample SFT's courier catalog for one destination country
+// via the "Discover services" admin action. doctype/weight are fixed
+// benchmarks; countryCode is supplied by the caller (see the discover route).
+const DISCOVERY_SAMPLE_DEFAULTS = { doctype: 'NON-DOX', weight: 1 };
 
 const router = express.Router();
 
@@ -32,7 +31,7 @@ router.get('/admin/:shopDomain/settings', storeAdminAuth, (req, res) => {
 
 // POST /admin/:shopDomain/settings — validate and save settings for the store
 router.post('/admin/:shopDomain/settings', storeAdminAuth, (req, res) => {
-  const { currencies, dimensionalWeightDivisor, disabledServiceCodes } = req.body || {};
+  const { currencies, dimensionalWeightDivisor, disabledServiceCodesByCountry } = req.body || {};
 
   // Validate currencies: must be a non-array object
   if (!currencies || typeof currencies !== 'object' || Array.isArray(currencies)) {
@@ -58,23 +57,30 @@ router.post('/admin/:shopDomain/settings', storeAdminAuth, (req, res) => {
     return res.status(400).json({ error: '"dimensionalWeightDivisor" must be a positive number' });
   }
 
-  // Validate disabledServiceCodes: optional; when present must be an array of strings.
-  // Omitted entirely means "no change to hidden services" is NOT assumed here —
-  // callers (the admin UI) always send the full current list, since this save
-  // replaces the whole settings row. Defaults to [] (nothing hidden) if absent.
-  let hiddenCodes = [];
-  if (disabledServiceCodes !== undefined) {
-    if (!Array.isArray(disabledServiceCodes) || disabledServiceCodes.some((c) => typeof c !== 'string')) {
-      return res.status(400).json({ error: '"disabledServiceCodes" must be an array of service_code strings' });
+  // Validate disabledServiceCodesByCountry: optional; when present must be a
+  // plain object mapping country code -> array of service_code strings, e.g.
+  // { "US": ["01", "15"], "GB": ["UK DHL"] }. Omitted entirely is NOT treated
+  // as "no change" — the admin UI always sends the full current map, since
+  // this save replaces the whole settings row. Defaults to {} (nothing hidden
+  // anywhere) if absent, matching today's behavior for every existing store.
+  let hiddenByCountry = {};
+  if (disabledServiceCodesByCountry !== undefined) {
+    if (typeof disabledServiceCodesByCountry !== 'object' || disabledServiceCodesByCountry === null || Array.isArray(disabledServiceCodesByCountry)) {
+      return res.status(400).json({ error: '"disabledServiceCodesByCountry" must be an object of country code -> array of service_code strings' });
     }
-    hiddenCodes = disabledServiceCodes;
+    for (const [country, codes] of Object.entries(disabledServiceCodesByCountry)) {
+      if (!Array.isArray(codes) || codes.some((c) => typeof c !== 'string')) {
+        return res.status(400).json({ error: `"disabledServiceCodesByCountry.${country}" must be an array of service_code strings` });
+      }
+    }
+    hiddenByCountry = disabledServiceCodesByCountry;
   }
 
   try {
     const updated = settingsStore.saveSettings(req.params.shopDomain, {
       currencies,
       dimensionalWeightDivisor: divisor,
-      disabledServiceCodes: hiddenCodes,
+      disabledServiceCodesByCountry: hiddenByCountry,
     });
     res.json(updated);
   } catch (err) {
@@ -85,31 +91,47 @@ router.post('/admin/:shopDomain/settings', storeAdminAuth, (req, res) => {
   }
 });
 
-// GET /admin/:shopDomain/known-services — list every courier service ever
-// seen from SFT, for the admin UI's hide/show checklist. The catalog is
-// shared across stores (SFT's rate table isn't store-specific), but this
+// GET /admin/:shopDomain/known-services/countries — list every destination
+// country code we have any recorded services for, so the admin UI's country
+// picker only ever offers countries with real data behind them.
+router.get('/admin/:shopDomain/known-services/countries', storeAdminAuth, (req, res) => {
+  res.json(storeRegistry.listKnownServiceCountries());
+});
+
+// GET /admin/:shopDomain/known-services?country=US — list courier services
+// ever seen from SFT for one destination country, for the admin UI's
+// per-country hide/show checklist. Omit ?country to get the full catalog
+// across every country (each entry carries its own countryCode). The catalog
+// is shared across stores (SFT's rate table isn't store-specific), but this
 // stays behind the same per-store auth as everything else under /admin/:shopDomain.
 router.get('/admin/:shopDomain/known-services', storeAdminAuth, (req, res) => {
-  res.json(storeRegistry.listKnownServices());
+  const country = typeof req.query.country === 'string' ? req.query.country : undefined;
+  res.json(storeRegistry.listKnownServices(country));
 });
 
 // POST /admin/:shopDomain/known-services/discover — run a one-off sample
-// query against SFT so the catalog is populated immediately (rather than
-// waiting for real checkout traffic to fill it in). Returns the full catalog
-// after recording anything new.
+// query against SFT for ONE destination country (body: { countryCode }, e.g.
+// "GB") so that country's catalog is populated immediately, rather than
+// waiting for real checkout traffic from that country to fill it in. Returns
+// the catalog for that country after recording anything new.
 router.post('/admin/:shopDomain/known-services/discover', storeAdminAuth, async (req, res) => {
+  const countryCode = typeof (req.body && req.body.countryCode) === 'string' ? req.body.countryCode.trim().toUpperCase() : '';
+  if (!countryCode) {
+    return res.status(400).json({ error: '"countryCode" is required, e.g. "US"' });
+  }
   try {
-    const sftResponse = await sftClient.getRates(DISCOVERY_SAMPLE_PARAMS);
+    const sftResponse = await sftClient.getRates({ ...DISCOVERY_SAMPLE_DEFAULTS, countryCode });
     if (sftResponse && sftResponse.success === true && Array.isArray(sftResponse.data)) {
       for (const entry of sftResponse.data) {
         storeRegistry.recordKnownService({
+          countryCode,
           serviceCode: entry.serviceCode,
           courierName: entry.courierName,
           serviceName: entry.serviceName,
         });
       }
     }
-    res.json(storeRegistry.listKnownServices());
+    res.json(storeRegistry.listKnownServices(countryCode));
   } catch (err) {
     console.error('[admin] service discovery failed:', err.message);
     res.status(502).json({ error: 'Could not reach SFT to discover services. Try again shortly.' });

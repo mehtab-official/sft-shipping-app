@@ -15,6 +15,10 @@
   button.secondary { background: #eee; color: #1a1a1a; }
   #status { margin-top: 12px; font-size: 13px; }
   .row-actions { text-align: right; }
+  .country-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .country-bar select { padding: 6px; font-size: 14px; }
+  .country-bar input[type="text"] { width: 60px; }
+  .country-bar .sep { color: #999; font-size: 13px; margin: 0 4px; }
 </style>
 </head>
 <body>
@@ -39,24 +43,34 @@
 
   <h3>Shipping services shown at checkout</h3>
   <p style="font-size:12px;color:#666;">
-    Uncheck a courier to hide it from your customers at checkout. Everything is shown by default.
-    New couriers SFT adds later show up here automatically and stay visible unless you hide them.
+    Choose a destination country, then uncheck a courier to hide it from customers shipping to that
+    country. Each country has its own list — hiding a courier for the US doesn't hide it for the UK.
+    Everything is shown by default. New couriers SFT adds later show up automatically and stay visible
+    unless you hide them for that country.
   </p>
+  <div class="country-bar">
+    <label for="country-select" style="font-size:13px;">Country:</label>
+    <select id="country-select"></select>
+    <span class="sep">or add one:</span>
+    <input type="text" id="new-country" placeholder="US" maxlength="2" />
+    <button class="secondary" id="discover-services">Discover services for this country</button>
+  </div>
   <table id="services-table">
     <thead><tr><th style="width:32px;"></th><th>Courier</th><th>Service</th></tr></thead>
     <tbody></tbody>
   </table>
   <p id="no-services" style="font-size:13px;color:#666;display:none;">
-    No services recorded yet.
+    No services recorded yet for this country. Click "Discover services for this country" above,
+    or wait for a real checkout from that country to populate it automatically.
   </p>
-  <button class="secondary" id="discover-services">Discover services now</button>
 
   <p><button id="save">Save settings</button></p>
   <div id="status"></div>
 
 <script>
 const shopDomain = window.location.pathname.split('/')[2];
-let disabledServiceCodes = [];
+let disabledByCountry = {}; // { "US": ["01", "15"], "GB": [...] } — full map, sent back whole on save
+let currentCountry = null;
 
 async function loadSettings() {
   const res = await fetch('/admin/' + shopDomain + '/settings');
@@ -65,23 +79,63 @@ async function loadSettings() {
   tbody.innerHTML = '';
   Object.entries(data.currencies || {}).forEach(([code, rate]) => addRow(code, rate));
   document.getElementById('divisor').value = data.dimensionalWeightDivisor || 5000;
-  disabledServiceCodes = Array.isArray(data.disabledServiceCodes) ? data.disabledServiceCodes : [];
-  return loadServices();
+  disabledByCountry = (data.disabledServiceCodesByCountry && typeof data.disabledServiceCodesByCountry === 'object')
+    ? data.disabledServiceCodesByCountry
+    : {};
+  return loadCountryList();
 }
 
-async function loadServices() {
-  const res = await fetch('/admin/' + shopDomain + '/known-services');
+async function loadCountryList() {
+  const res = await fetch('/admin/' + shopDomain + '/known-services/countries');
+  const countries = await res.json();
+  const select = document.getElementById('country-select');
+  select.innerHTML = '';
+  if (countries.length === 0) {
+    const opt = document.createElement('option');
+    opt.textContent = 'No countries yet — add one below';
+    opt.disabled = true;
+    opt.selected = true;
+    select.appendChild(opt);
+    renderServices([]);
+    return;
+  }
+  countries.forEach((c) => {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    select.appendChild(opt);
+  });
+  currentCountry = countries[0];
+  select.value = currentCountry;
+  return loadServicesForCountry(currentCountry);
+}
+
+async function loadServicesForCountry(country) {
+  const res = await fetch('/admin/' + shopDomain + '/known-services?country=' + encodeURIComponent(country));
   const services = await res.json();
   renderServices(services);
+}
+
+// Reads the checkboxes currently on screen and writes them into
+// disabledByCountry[currentCountry] — call this BEFORE switching country or
+// saving, so no in-progress edits for the country just left are lost.
+function captureCurrentCountryCheckboxes() {
+  if (!currentCountry) return;
+  const hidden = [];
+  document.querySelectorAll('.service-toggle').forEach((cb) => {
+    if (!cb.checked) hidden.push(cb.dataset.code);
+  });
+  disabledByCountry[currentCountry] = hidden;
 }
 
 function renderServices(services) {
   const tbody = document.querySelector('#services-table tbody');
   tbody.innerHTML = '';
   document.getElementById('no-services').style.display = services.length === 0 ? 'block' : 'none';
+  const hiddenForCountry = (currentCountry && disabledByCountry[currentCountry]) || [];
   services.forEach((svc) => {
     const tr = document.createElement('tr');
-    const checked = !disabledServiceCodes.includes(svc.serviceCode);
+    const checked = !hiddenForCountry.includes(svc.serviceCode);
     tr.innerHTML = `
       <td><input type="checkbox" class="service-toggle" data-code="${svc.serviceCode}" ${checked ? 'checked' : ''} /></td>
       <td>${svc.courierName}</td>
@@ -91,17 +145,38 @@ function renderServices(services) {
   });
 }
 
+document.getElementById('country-select').addEventListener('change', async (e) => {
+  captureCurrentCountryCheckboxes();
+  currentCountry = e.target.value;
+  await loadServicesForCountry(currentCountry);
+});
+
 document.getElementById('discover-services').addEventListener('click', async (e) => {
+  const typed = document.getElementById('new-country').value.trim().toUpperCase();
+  const targetCountry = typed || currentCountry;
+  if (!targetCountry) {
+    document.getElementById('status').textContent = 'Type a country code first (e.g. US).';
+    document.getElementById('status').style.color = 'red';
+    return;
+  }
+  captureCurrentCountryCheckboxes();
   const btn = e.target;
   const statusEl = document.getElementById('status');
   btn.disabled = true;
   btn.textContent = 'Discovering…';
   try {
-    const res = await fetch('/admin/' + shopDomain + '/known-services/discover', { method: 'POST' });
+    const res = await fetch('/admin/' + shopDomain + '/known-services/discover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ countryCode: targetCountry }),
+    });
     if (res.ok) {
       const services = await res.json();
+      currentCountry = targetCountry;
+      document.getElementById('new-country').value = '';
+      await loadCountryListPreservingSelection(targetCountry);
       renderServices(services);
-      statusEl.textContent = 'Service list refreshed.';
+      statusEl.textContent = 'Service list refreshed for ' + targetCountry + '.';
       statusEl.style.color = 'green';
     } else {
       const err = await res.json();
@@ -110,9 +185,25 @@ document.getElementById('discover-services').addEventListener('click', async (e)
     }
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Discover services now';
+    btn.textContent = 'Discover services for this country';
   }
 });
+
+// Refreshes the country dropdown (a discover call may have just added a new
+// country) and makes sure `country` ends up selected in it.
+async function loadCountryListPreservingSelection(country) {
+  const res = await fetch('/admin/' + shopDomain + '/known-services/countries');
+  const countries = await res.json();
+  const select = document.getElementById('country-select');
+  select.innerHTML = '';
+  countries.forEach((c) => {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    select.appendChild(opt);
+  });
+  select.value = country;
+}
 
 function addRow(code = '', rate = '') {
   const tbody = document.querySelector('#currency-table tbody');
@@ -138,15 +229,12 @@ document.getElementById('save').addEventListener('click', async () => {
 
   const dimensionalWeightDivisor = parseFloat(document.getElementById('divisor').value);
 
-  const newDisabledServiceCodes = [];
-  document.querySelectorAll('.service-toggle').forEach((cb) => {
-    if (!cb.checked) newDisabledServiceCodes.push(cb.dataset.code);
-  });
+  captureCurrentCountryCheckboxes();
 
   const res = await fetch('/admin/' + shopDomain + '/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ currencies, dimensionalWeightDivisor, disabledServiceCodes: newDisabledServiceCodes }),
+    body: JSON.stringify({ currencies, dimensionalWeightDivisor, disabledServiceCodesByCountry: disabledByCountry }),
   });
 
   const statusEl = document.getElementById('status');

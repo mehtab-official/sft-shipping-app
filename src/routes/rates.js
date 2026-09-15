@@ -75,13 +75,16 @@ router.post('/rates', async (req, res) => {
     const sftResponse = await sftClient.getRates(sftParams);
 
     // 4b. Grow the shared "known services" catalog from real SFT responses, so
-    // each store's admin dashboard can offer a hide/show checklist without the
-    // merchant having to know service codes ahead of time. Best-effort and
-    // skipped in mock mode so we don't pollute the catalog with fake data.
+    // each store's admin dashboard can offer a per-country hide/show checklist
+    // without the merchant having to know service codes ahead of time. Keyed by
+    // destination country, since SFT quotes a different courier set per country.
+    // Best-effort and skipped in mock mode so we don't pollute the catalog with
+    // fake data.
     if (!config.sft.mockMode && sftResponse && sftResponse.success === true && Array.isArray(sftResponse.data)) {
       for (const entry of sftResponse.data) {
         try {
           storeRegistry.recordKnownService({
+            countryCode: sftParams.countryCode,
             serviceCode: entry.serviceCode,
             courierName: entry.courierName,
             serviceName: entry.serviceName,
@@ -97,8 +100,12 @@ router.post('/rates', async (req, res) => {
     const targetCurrency = settingsStore.getCurrencyRate(shopDomain, shopifyRateRequest.currency);
     const allRates = mapSftResponseToShopifyRates(sftResponse, targetCurrency);
 
-    // 6. Hide any service this store's admin has chosen to hide from checkout.
-    const disabledServiceCodes = new Set(settingsStore.getDisabledServiceCodes(shopDomain));
+    // 6. Hide any service this store's admin has chosen to hide from checkout
+    // for THIS destination country — the same courier can be shown for one
+    // country and hidden for another.
+    const disabledServiceCodes = new Set(
+      settingsStore.getDisabledServiceCodesForCountry(shopDomain, sftParams.countryCode)
+    );
     const rates = disabledServiceCodes.size === 0
       ? allRates
       : allRates.filter((rate) => !disabledServiceCodes.has(rate.service_code));
