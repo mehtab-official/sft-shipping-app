@@ -19,6 +19,25 @@
   .country-bar select { padding: 6px; font-size: 14px; }
   .country-bar input[type="text"] { width: 60px; }
   .country-bar .sep { color: #999; font-size: 13px; margin: 0 4px; }
+  .country-picker { position: relative; display: inline-block; }
+  .country-picker input[type="text"] {
+    width: 220px; text-transform: none; padding: 6px 8px;
+  }
+  .country-picker .dropdown {
+    position: absolute; top: 100%; left: 0; margin-top: 2px; width: 260px; max-height: 220px;
+    overflow-y: auto; background: white; border: 1px solid #ccc; border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12); z-index: 10;
+  }
+  .country-picker .dropdown-option {
+    padding: 7px 10px; font-size: 13px; cursor: pointer;
+  }
+  .country-picker .dropdown-option:hover,
+  .country-picker .dropdown-option.active {
+    background: #1a1a1a; color: white;
+  }
+  .country-picker .dropdown-empty {
+    padding: 8px 10px; font-size: 13px; color: #888;
+  }
 </style>
 </head>
 <body>
@@ -52,7 +71,10 @@
     <label for="country-select" style="font-size:13px;">Country:</label>
     <select id="country-select"></select>
     <span class="sep">or add one:</span>
-    <input type="text" id="new-country" placeholder="US" maxlength="2" />
+    <div class="country-picker">
+      <input type="text" id="new-country" placeholder="Search country…" autocomplete="off" />
+      <div class="dropdown" id="country-dropdown" hidden></div>
+    </div>
     <button class="secondary" id="discover-services">Discover services for this country</button>
   </div>
   <table id="services-table">
@@ -71,6 +93,63 @@
 const shopDomain = window.location.pathname.split('/')[2];
 let disabledByCountry = {}; // { "US": ["01", "15"], "GB": [...] } — full map, sent back whole on save
 let currentCountry = null;
+
+// ISO 3166-1 country codes, US pinned first (most common), the rest A–Z by
+// name — lets the merchant pick a destination country from a searchable list
+// instead of having to know/guess its 2-letter code.
+const COUNTRIES = [
+  ['US', 'UNITED STATES'],
+  ['AF', 'AFGHANISTAN'], ['AL', 'ALBANIA'], ['DZ', 'ALGERIA'], ['AD', 'ANDORRA'],
+  ['AO', 'ANGOLA'], ['AG', 'ANTIGUA AND BARBUDA'], ['AR', 'ARGENTINA'], ['AM', 'ARMENIA'],
+  ['AU', 'AUSTRALIA'], ['AT', 'AUSTRIA'], ['AZ', 'AZERBAIJAN'], ['BS', 'BAHAMAS'],
+  ['BH', 'BAHRAIN'], ['BD', 'BANGLADESH'], ['BB', 'BARBADOS'], ['BY', 'BELARUS'],
+  ['BE', 'BELGIUM'], ['BZ', 'BELIZE'], ['BJ', 'BENIN'], ['BT', 'BHUTAN'],
+  ['BO', 'BOLIVIA'], ['BA', 'BOSNIA AND HERZEGOVINA'], ['BW', 'BOTSWANA'], ['BR', 'BRAZIL'],
+  ['BN', 'BRUNEI'], ['BG', 'BULGARIA'], ['BF', 'BURKINA FASO'], ['BI', 'BURUNDI'],
+  ['KH', 'CAMBODIA'], ['CM', 'CAMEROON'], ['CA', 'CANADA'], ['CV', 'CAPE VERDE'],
+  ['CF', 'CENTRAL AFRICAN REPUBLIC'], ['TD', 'CHAD'], ['CL', 'CHILE'], ['CN', 'CHINA'],
+  ['CO', 'COLOMBIA'], ['KM', 'COMOROS'], ['CG', 'CONGO'], ['CD', 'CONGO (DRC)'],
+  ['CR', 'COSTA RICA'], ['HR', 'CROATIA'], ['CU', 'CUBA'], ['CY', 'CYPRUS'],
+  ['CZ', 'CZECH REPUBLIC'], ['DK', 'DENMARK'], ['DJ', 'DJIBOUTI'], ['DM', 'DOMINICA'],
+  ['DO', 'DOMINICAN REPUBLIC'], ['EC', 'ECUADOR'], ['EG', 'EGYPT'], ['SV', 'EL SALVADOR'],
+  ['GQ', 'EQUATORIAL GUINEA'], ['ER', 'ERITREA'], ['EE', 'ESTONIA'], ['SZ', 'ESWATINI'],
+  ['ET', 'ETHIOPIA'], ['FJ', 'FIJI'], ['FI', 'FINLAND'], ['FR', 'FRANCE'],
+  ['GA', 'GABON'], ['GM', 'GAMBIA'], ['GE', 'GEORGIA'], ['DE', 'GERMANY'],
+  ['GH', 'GHANA'], ['GR', 'GREECE'], ['GD', 'GRENADA'], ['GT', 'GUATEMALA'],
+  ['GN', 'GUINEA'], ['GW', 'GUINEA-BISSAU'], ['GY', 'GUYANA'], ['HT', 'HAITI'],
+  ['HN', 'HONDURAS'], ['HK', 'HONG KONG'], ['HU', 'HUNGARY'], ['IS', 'ICELAND'],
+  ['IN', 'INDIA'], ['ID', 'INDONESIA'], ['IR', 'IRAN'], ['IQ', 'IRAQ'],
+  ['IE', 'IRELAND'], ['IL', 'ISRAEL'], ['IT', 'ITALY'], ['JM', 'JAMAICA'],
+  ['JP', 'JAPAN'], ['JO', 'JORDAN'], ['KZ', 'KAZAKHSTAN'], ['KE', 'KENYA'],
+  ['KI', 'KIRIBATI'], ['KW', 'KUWAIT'], ['KG', 'KYRGYZSTAN'], ['LA', 'LAOS'],
+  ['LV', 'LATVIA'], ['LB', 'LEBANON'], ['LS', 'LESOTHO'], ['LR', 'LIBERIA'],
+  ['LY', 'LIBYA'], ['LI', 'LIECHTENSTEIN'], ['LT', 'LITHUANIA'], ['LU', 'LUXEMBOURG'],
+  ['MO', 'MACAU'], ['MG', 'MADAGASCAR'], ['MW', 'MALAWI'], ['MY', 'MALAYSIA'],
+  ['MV', 'MALDIVES'], ['ML', 'MALI'], ['MT', 'MALTA'], ['MH', 'MARSHALL ISLANDS'],
+  ['MR', 'MAURITANIA'], ['MU', 'MAURITIUS'], ['MX', 'MEXICO'], ['FM', 'MICRONESIA'],
+  ['MD', 'MOLDOVA'], ['MC', 'MONACO'], ['MN', 'MONGOLIA'], ['ME', 'MONTENEGRO'],
+  ['MA', 'MOROCCO'], ['MZ', 'MOZAMBIQUE'], ['MM', 'MYANMAR'], ['NA', 'NAMIBIA'],
+  ['NR', 'NAURU'], ['NP', 'NEPAL'], ['NL', 'NETHERLANDS'], ['NZ', 'NEW ZEALAND'],
+  ['NI', 'NICARAGUA'], ['NE', 'NIGER'], ['NG', 'NIGERIA'], ['KP', 'NORTH KOREA'],
+  ['MK', 'NORTH MACEDONIA'], ['NO', 'NORWAY'], ['OM', 'OMAN'], ['PK', 'PAKISTAN'],
+  ['PW', 'PALAU'], ['PA', 'PANAMA'], ['PG', 'PAPUA NEW GUINEA'], ['PY', 'PARAGUAY'],
+  ['PE', 'PERU'], ['PH', 'PHILIPPINES'], ['PL', 'POLAND'], ['PT', 'PORTUGAL'],
+  ['QA', 'QATAR'], ['RO', 'ROMANIA'], ['RU', 'RUSSIA'], ['RW', 'RWANDA'],
+  ['KN', 'SAINT KITTS AND NEVIS'], ['LC', 'SAINT LUCIA'], ['VC', 'SAINT VINCENT AND THE GRENADINES'],
+  ['WS', 'SAMOA'], ['SM', 'SAN MARINO'], ['ST', 'SAO TOME AND PRINCIPE'], ['SA', 'SAUDI ARABIA'],
+  ['SN', 'SENEGAL'], ['RS', 'SERBIA'], ['SC', 'SEYCHELLES'], ['SL', 'SIERRA LEONE'],
+  ['SG', 'SINGAPORE'], ['SK', 'SLOVAKIA'], ['SI', 'SLOVENIA'], ['SB', 'SOLOMON ISLANDS'],
+  ['SO', 'SOMALIA'], ['ZA', 'SOUTH AFRICA'], ['KR', 'SOUTH KOREA'], ['SS', 'SOUTH SUDAN'],
+  ['ES', 'SPAIN'], ['LK', 'SRI LANKA'], ['SD', 'SUDAN'], ['SR', 'SURINAME'],
+  ['SE', 'SWEDEN'], ['CH', 'SWITZERLAND'], ['SY', 'SYRIA'], ['TW', 'TAIWAN'],
+  ['TJ', 'TAJIKISTAN'], ['TZ', 'TANZANIA'], ['TH', 'THAILAND'], ['TL', 'TIMOR-LESTE'],
+  ['TG', 'TOGO'], ['TO', 'TONGA'], ['TT', 'TRINIDAD AND TOBAGO'], ['TN', 'TUNISIA'],
+  ['TR', 'TURKEY'], ['TM', 'TURKMENISTAN'], ['TV', 'TUVALU'], ['UG', 'UGANDA'],
+  ['UA', 'UKRAINE'], ['AE', 'UNITED ARAB EMIRATES'], ['GB', 'UNITED KINGDOM'], ['UY', 'URUGUAY'],
+  ['UZ', 'UZBEKISTAN'], ['VU', 'VANUATU'], ['VA', 'VATICAN CITY'], ['VE', 'VENEZUELA'],
+  ['VN', 'VIETNAM'], ['YE', 'YEMEN'], ['ZM', 'ZAMBIA'], ['ZW', 'ZIMBABWE'],
+];
+let selectedNewCountryCode = ''; // code chosen from the searchable dropdown below
 
 async function loadSettings() {
   const res = await fetch('/admin/' + shopDomain + '/settings');
@@ -151,11 +230,52 @@ document.getElementById('country-select').addEventListener('change', async (e) =
   await loadServicesForCountry(currentCountry);
 });
 
+// Searchable "add a country" picker — lets the merchant find a country by
+// name instead of having to know its 2-letter code, the same way SFT's own
+// rate lookup tool works.
+const countryInput = document.getElementById('new-country');
+const countryDropdown = document.getElementById('country-dropdown');
+
+function renderCountryDropdown(filterText) {
+  const q = filterText.trim().toUpperCase();
+  const matches = COUNTRIES.filter(([code, name]) => !q || code.includes(q) || name.includes(q)).slice(0, 50);
+  countryDropdown.innerHTML = '';
+  if (matches.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'dropdown-empty';
+    empty.textContent = 'No matching country';
+    countryDropdown.appendChild(empty);
+  } else {
+    matches.forEach(([code, name]) => {
+      const opt = document.createElement('div');
+      opt.className = 'dropdown-option';
+      opt.textContent = code + ' - ' + name;
+      // mousedown (not click) so this fires before the input's blur hides the dropdown
+      opt.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        selectedNewCountryCode = code;
+        countryInput.value = code + ' - ' + name;
+        countryDropdown.hidden = true;
+      });
+      countryDropdown.appendChild(opt);
+    });
+  }
+  countryDropdown.hidden = false;
+}
+
+countryInput.addEventListener('focus', () => renderCountryDropdown(''));
+countryInput.addEventListener('input', () => {
+  selectedNewCountryCode = ''; // typing invalidates a previous pick until they choose again
+  renderCountryDropdown(countryInput.value);
+});
+countryInput.addEventListener('blur', () => {
+  setTimeout(() => { countryDropdown.hidden = true; }, 150); // let a pending mousedown register first
+});
+
 document.getElementById('discover-services').addEventListener('click', async (e) => {
-  const typed = document.getElementById('new-country').value.trim().toUpperCase();
-  const targetCountry = typed || currentCountry;
+  const targetCountry = selectedNewCountryCode || currentCountry;
   if (!targetCountry) {
-    document.getElementById('status').textContent = 'Type a country code first (e.g. US).';
+    document.getElementById('status').textContent = 'Search for and select a country first.';
     document.getElementById('status').style.color = 'red';
     return;
   }
@@ -173,7 +293,8 @@ document.getElementById('discover-services').addEventListener('click', async (e)
     if (res.ok) {
       const services = await res.json();
       currentCountry = targetCountry;
-      document.getElementById('new-country').value = '';
+      countryInput.value = '';
+      selectedNewCountryCode = '';
       await loadCountryListPreservingSelection(targetCountry);
       renderServices(services);
       statusEl.textContent = 'Service list refreshed for ' + targetCountry + '.';
